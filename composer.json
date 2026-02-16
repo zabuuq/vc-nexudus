@@ -1,0 +1,19 @@
+{
+  "name": "zabuuq/vc-nexudus",
+  "description": "WordPress Nexudus integration plugin",
+  "type": "wordpress-plugin",
+  "require-dev": {
+    "squizlabs/php_codesniffer": "^3.10",
+    "wp-coding-standards/wpcs": "^3.1",
+    "phpstan/phpstan": "^1.11"
+  },
+  "scripts": {
+    "phpcs": "phpcs --standard=phpcs.xml.dist --extensions=php",
+    "phpstan": "phpstan analyse"
+  },
+  "config": {
+    "allow-plugins": {
+      "dealerdirect/phpcodesniffer-composer-installer": true
+    }
+  }
+}

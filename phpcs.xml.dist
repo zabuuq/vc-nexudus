@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<ruleset name="VC Nexudus">
+  <description>WordPress Coding Standards ruleset for PHP plugin files.</description>
+  <arg name="extensions" value="php"/>
+  <exclude-pattern>*/build/*</exclude-pattern>
+  <exclude-pattern>*/assets/*</exclude-pattern>
+  <exclude-pattern>*/node_modules/*</exclude-pattern>
+  <rule ref="WordPress-Core" />
+  <rule ref="WordPress-Extra" />
+  <file>vc-nexudus.php</file>
+  <file>src</file>
+</ruleset>
