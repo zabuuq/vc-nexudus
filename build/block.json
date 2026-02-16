@@ -1,0 +1,35 @@
+{
+  "apiVersion": 3,
+  "name": "vc-nexudus/products",
+  "title": "VC Nexudus Products",
+  "category": "widgets",
+  "icon": "products",
+  "description": "Display Nexudus memberships and room bookings.",
+  "textdomain": "vc-nexudus",
+  "editorScript": "vc-nexudus-block-editor",
+  "attributes": {
+    "ids": {
+      "type": "array",
+      "default": []
+    },
+    "layout": {
+      "type": "string",
+      "default": "grid"
+    },
+    "columns": {
+      "type": "number",
+      "default": 3
+    },
+    "showPrice": {
+      "type": "boolean",
+      "default": true
+    },
+    "showDescription": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "supports": {
+    "html": false
+  }
+}

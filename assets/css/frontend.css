@@ -1,0 +1,31 @@
+.vc-nexudus-products {
+	display: grid;
+	gap: 1rem;
+	margin: 1rem 0;
+}
+
+.vc-nexudus-layout-grid {
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.vc-nexudus-columns-1 { grid-template-columns: 1fr; }
+.vc-nexudus-columns-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.vc-nexudus-columns-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.vc-nexudus-columns-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+.vc-nexudus-layout-list,
+.vc-nexudus-layout-single {
+	grid-template-columns: 1fr;
+}
+
+.vc-nexudus-card {
+	border: 1px solid #ddd;
+	padding: 1rem;
+	border-radius: 6px;
+	background: #fff;
+}
+
+.vc-nexudus-cta {
+	display: inline-block;
+	margin-top: 0.75rem;
+}
