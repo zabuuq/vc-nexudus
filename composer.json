@@ -8,7 +8,7 @@
     "phpstan/phpstan": "^1.11"
   },
   "scripts": {
-    "phpcs": "phpcs",
+    "phpcs": "phpcs --standard=phpcs.xml.dist --extensions=php",
     "phpstan": "phpstan analyse"
   },
   "config": {

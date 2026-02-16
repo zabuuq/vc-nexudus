@@ -14,5 +14,5 @@ jobs:
           php-version: '8.0'
           tools: composer
       - run: composer install --no-interaction --prefer-dist
-      - run: vendor/bin/phpcs
+      - run: vendor/bin/phpcs --standard=phpcs.xml.dist --extensions=php
       - run: vendor/bin/phpstan analyse
