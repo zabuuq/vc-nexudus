@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace VC\Nexudus\Auth;
 
+use VC\Nexudus\Support\Clock;
 use WP_Error;
 
 final class TokenManager {
 	private TokenStore $store;
 	private OAuthClient $oauth_client;
+	private Clock $clock;
 
-	public function __construct(TokenStore $store, OAuthClient $oauth_client) {
+	public function __construct(TokenStore $store, OAuthClient $oauth_client, Clock $clock) {
 		$this->store        = $store;
 		$this->oauth_client = $oauth_client;
+		$this->clock        = $clock;
 	}
 
 	/**
@@ -39,6 +42,15 @@ final class TokenManager {
 		$tokens = $this->store->get();
 		if (empty($tokens['access_token'])) {
 			return new WP_Error('vc_nexudus_not_connected', __('Nexudus is not connected. Please connect in settings.', 'vc-nexudus'));
+		}
+
+		$expires_at = isset($tokens['expires_at']) ? (int) $tokens['expires_at'] : 0;
+		if ($expires_at > 0 && $expires_at <= $this->clock->now()) {
+			$refreshed = $this->refresh_tokens();
+			if (is_wp_error($refreshed)) {
+				return $refreshed;
+			}
+			return (string) $refreshed['access_token'];
 		}
 
 		return (string) $tokens['access_token'];
