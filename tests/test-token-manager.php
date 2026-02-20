@@ -17,7 +17,7 @@ final class Test_Token_Manager extends TestCase {
 		];
 	}
 
-	public function test_get_access_token_does_not_auto_refresh(): void {
+	public function test_get_access_token_refreshes_when_expired(): void {
 		$store = new TokenStore(new Crypto('unit-test-key'));
 		$store->save([
 			'access_token'  => 'expired-token',
@@ -25,8 +25,13 @@ final class Test_Token_Manager extends TestCase {
 			'expires_at'    => 1,
 		]);
 
-		$manager = new TokenManager($store, new OAuthClient('vc_nexudus_settings', new Clock()));
-		$this->assertSame('expired-token', $manager->get_access_token());
+		$GLOBALS['vc_nexudus_mock_post_response'] = [
+			'response' => ['code' => 200],
+			'body'     => '{"access_token":"fresh-token","refresh_token":"fresh-refresh","token_type":"bearer","expires_in":60}',
+		];
+
+		$manager = new TokenManager($store, new OAuthClient('vc_nexudus_settings', new Clock()), new Clock());
+		$this->assertSame('fresh-token', $manager->get_access_token());
 	}
 
 	public function test_refresh_tokens_clears_store_on_refresh_failure(): void {
@@ -41,7 +46,7 @@ final class Test_Token_Manager extends TestCase {
 			'body'     => '{"error":"invalid_grant"}',
 		];
 
-		$manager = new TokenManager($store, new OAuthClient('vc_nexudus_settings', new Clock()));
+		$manager = new TokenManager($store, new OAuthClient('vc_nexudus_settings', new Clock()), new Clock());
 		$result  = $manager->refresh_tokens();
 
 		$this->assertTrue(is_wp_error($result));
