@@ -25,16 +25,17 @@ final class SettingsPage {
 	}
 
 	public function register_menu(): void {
-		add_options_page(
+		add_menu_page(
 			__('VC Nexudus Settings', 'vc-nexudus'),
 			__('VC Nexudus', 'vc-nexudus'),
 			'manage_options',
 			'vc-nexudus',
-			[$this, 'render_settings_page']
+			[$this, 'render_settings_page'],
+			'dashicons-admin-generic'
 		);
 
 		add_submenu_page(
-			'options-general.php',
+			'vc-nexudus',
 			__('VC Nexudus Product Browser', 'vc-nexudus'),
 			__('VC Nexudus Products', 'vc-nexudus'),
 			'manage_options',
@@ -174,7 +175,7 @@ final class SettingsPage {
 	}
 
 	public function enqueue_assets(string $hook): void {
-		if ('settings_page_vc-nexudus' !== $hook && 'settings_page_vc-nexudus-products' !== $hook) {
+		if ('toplevel_page_vc-nexudus' !== $hook && 'vc-nexudus_page_vc-nexudus-products' !== $hook) {
 			return;
 		}
 
