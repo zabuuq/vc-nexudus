@@ -4,15 +4,19 @@ declare(strict_types=1);
 
 namespace VC\Nexudus\Admin;
 
+use VC\Nexudus\Api\NexudusClient;
+use VC\Nexudus\Auth\TokenManager;
 use VC\Nexudus\Services\ProductService;
 
 final class SettingsPage {
 	private ProductService $product_service;
+	private TokenManager $token_manager;
 	private string $option_key;
 	private string $plugin_file;
 
-	public function __construct(ProductService $product_service, string $option_key, string $plugin_file) {
+	public function __construct(ProductService $product_service, TokenManager $token_manager, string $option_key, string $plugin_file) {
 		$this->product_service = $product_service;
+		$this->token_manager   = $token_manager;
 		$this->option_key      = $option_key;
 		$this->plugin_file     = $plugin_file;
 	}
@@ -22,6 +26,9 @@ final class SettingsPage {
 		add_action('admin_init', [$this, 'register_settings']);
 		add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
 		add_action('wp_ajax_vc_nexudus_test_connection', [$this, 'ajax_test_connection']);
+		add_action('wp_ajax_vc_nexudus_connect_oauth', [$this, 'ajax_connect_oauth']);
+		add_action('wp_ajax_vc_nexudus_refresh_oauth', [$this, 'ajax_refresh_oauth']);
+		add_action('wp_ajax_vc_nexudus_disconnect_oauth', [$this, 'ajax_disconnect_oauth']);
 	}
 
 	public function register_menu(): void {
@@ -47,31 +54,27 @@ final class SettingsPage {
 	public function register_settings(): void {
 		register_setting($this->option_key, $this->option_key, [$this, 'sanitize_settings']);
 
-		add_settings_section('vc_nexudus_auth', __('OAuth Settings', 'vc-nexudus'), null, 'vc-nexudus');
-		add_settings_section('vc_nexudus_api', __('API Settings', 'vc-nexudus'), null, 'vc-nexudus');
+		add_settings_section('vc_nexudus_api', __('Nexudus API Settings', 'vc-nexudus'), null, 'vc-nexudus');
+		add_settings_section('vc_nexudus_oauth', __('OAuth Settings', 'vc-nexudus'), null, 'vc-nexudus');
 		add_settings_section('vc_nexudus_cache', __('Cache Settings', 'vc-nexudus'), null, 'vc-nexudus');
 
 		$fields = [
-			'api_base_url'          => 'API Base URL',
-			'oauth_token_url'       => 'OAuth Token URL',
-			'oauth_client_id'       => 'OAuth Client ID',
-			'oauth_client_secret'   => 'OAuth Client Secret',
-			'oauth_grant_type'      => 'OAuth Grant Type',
-			'oauth_scope'           => 'OAuth Scope',
-			'memberships_endpoint'  => 'Memberships Endpoint Path',
-			'rooms_endpoint'        => 'Room Bookings Endpoint Path',
-			'connection_test_path'  => 'Connection Test Endpoint Path',
-			'cache_ttl'             => 'Cache TTL (seconds)',
+			'tenant_base_url'      => ['label' => 'Base Nexudus Tenant URL', 'section' => 'vc_nexudus_api'],
+			'oauth_token_url'      => ['label' => 'OAuth Token URL', 'section' => 'vc_nexudus_oauth'],
+			'oauth_client_id_header' => ['label' => 'OAuth Client ID Header', 'section' => 'vc_nexudus_oauth'],
+			'memberships_endpoint' => ['label' => 'Memberships Endpoint Path', 'section' => 'vc_nexudus_api'],
+			'rooms_endpoint'       => ['label' => 'Room Bookings Endpoint Path', 'section' => 'vc_nexudus_api'],
+			'connection_test_path' => ['label' => 'Connection Test Endpoint Path', 'section' => 'vc_nexudus_api'],
+			'cache_ttl'            => ['label' => 'Cache TTL (seconds)', 'section' => 'vc_nexudus_cache'],
 		];
 
-		foreach ($fields as $key => $label) {
-			$section = in_array($key, ['cache_ttl'], true) ? 'vc_nexudus_cache' : (str_starts_with($key, 'oauth_') ? 'vc_nexudus_auth' : 'vc_nexudus_api');
+		foreach ($fields as $key => $field) {
 			add_settings_field(
 				$key,
-				__($label, 'vc-nexudus'),
+				__($field['label'], 'vc-nexudus'),
 				[$this, 'render_field'],
 				'vc-nexudus',
-				$section,
+				$field['section'],
 				['key' => $key]
 			);
 		}
@@ -83,12 +86,9 @@ final class SettingsPage {
 	 */
 	public function sanitize_settings(array $settings): array {
 		$sanitized = [];
-		$sanitized['api_base_url']         = esc_url_raw((string) ($settings['api_base_url'] ?? ''));
-		$sanitized['oauth_token_url']      = esc_url_raw((string) ($settings['oauth_token_url'] ?? ''));
-		$sanitized['oauth_client_id']      = sanitize_text_field((string) ($settings['oauth_client_id'] ?? ''));
-		$sanitized['oauth_client_secret']  = sanitize_text_field((string) ($settings['oauth_client_secret'] ?? ''));
-		$sanitized['oauth_grant_type']     = sanitize_text_field((string) ($settings['oauth_grant_type'] ?? 'client_credentials'));
-		$sanitized['oauth_scope']          = sanitize_text_field((string) ($settings['oauth_scope'] ?? ''));
+		$sanitized['tenant_base_url']      = esc_url_raw((string) ($settings['tenant_base_url'] ?? ''));
+		$sanitized['oauth_token_url']      = esc_url_raw((string) ($settings['oauth_token_url'] ?? 'https://spaces.nexudus.com/api/token'));
+		$sanitized['oauth_client_id_header'] = sanitize_text_field((string) ($settings['oauth_client_id_header'] ?? wp_generate_uuid4()));
 		$sanitized['memberships_endpoint'] = sanitize_text_field((string) ($settings['memberships_endpoint'] ?? '/spaces/memberships'));
 		$sanitized['rooms_endpoint']       = sanitize_text_field((string) ($settings['rooms_endpoint'] ?? '/spaces/rooms'));
 		$sanitized['connection_test_path'] = sanitize_text_field((string) ($settings['connection_test_path'] ?? '/'));
@@ -103,8 +103,11 @@ final class SettingsPage {
 		$options = get_option($this->option_key, []);
 		$key     = (string) ($args['key'] ?? '');
 		$value   = is_array($options) && isset($options[$key]) ? (string) $options[$key] : '';
-		$type    = 'oauth_client_secret' === $key ? 'password' : 'text';
-		echo '<input type="' . esc_attr($type) . '" class="regular-text" name="' . esc_attr($this->option_key) . '[' . esc_attr($key) . ']" value="' . esc_attr($value) . '" />';
+		echo '<input type="text" class="regular-text" name="' . esc_attr($this->option_key) . '[' . esc_attr($key) . ']" value="' . esc_attr($value) . '" />';
+
+		if ('oauth_client_id_header' === $key) {
+			echo '<p class="description">' . esc_html__('Required for refresh. Keep this stable for this site connection.', 'vc-nexudus') . '</p>';
+		}
 	}
 
 	public function render_settings_page(): void {
@@ -116,6 +119,8 @@ final class SettingsPage {
 			$this->product_service->clear_cache();
 			echo '<div class="notice notice-success"><p>' . esc_html__('Cache cleared.', 'vc-nexudus') . '</p></div>';
 		}
+
+		$status = $this->token_manager->get_status();
 		?>
 		<div class="wrap vc-nexudus-settings-wrap">
 			<h1><?php echo esc_html__('VC Nexudus Settings', 'vc-nexudus'); ?></h1>
@@ -126,6 +131,38 @@ final class SettingsPage {
 				submit_button(__('Save Settings', 'vc-nexudus'));
 				?>
 			</form>
+
+			<hr />
+			<h2><?php echo esc_html__('Nexudus OAuth Connection', 'vc-nexudus'); ?></h2>
+			<p><strong><?php echo esc_html__('Status:', 'vc-nexudus'); ?></strong> <span id="vc-nexudus-connection-state"><?php echo ! empty($status['connected']) ? esc_html__('Connected', 'vc-nexudus') : esc_html__('Not connected', 'vc-nexudus'); ?></span></p>
+			<p><strong><?php echo esc_html__('Token expiry:', 'vc-nexudus'); ?></strong> <span id="vc-nexudus-token-expiry"><?php echo ! empty($status['expires_at']) ? esc_html(wp_date('Y-m-d H:i:s', (int) $status['expires_at'])) : esc_html__('Unknown', 'vc-nexudus'); ?></span></p>
+			<p><strong><?php echo esc_html__('Last refresh:', 'vc-nexudus'); ?></strong> <span id="vc-nexudus-last-refresh"><?php echo ! empty($status['last_refresh_at']) ? esc_html(wp_date('Y-m-d H:i:s', (int) $status['last_refresh_at'])) : esc_html__('Never', 'vc-nexudus'); ?></span></p>
+
+			<p>
+				<button class="button button-primary" id="vc-nexudus-open-connect-modal"><?php echo esc_html__('Connect to Nexudus', 'vc-nexudus'); ?></button>
+				<button class="button button-secondary" id="vc-nexudus-refresh-token"><?php echo esc_html__('Refresh token now', 'vc-nexudus'); ?></button>
+				<button class="button button-secondary" id="vc-nexudus-disconnect"><?php echo esc_html__('Disconnect', 'vc-nexudus'); ?></button>
+			</p>
+			<p id="vc-nexudus-oauth-result" aria-live="polite"></p>
+
+			<div id="vc-nexudus-connect-modal" class="vc-nexudus-modal" hidden>
+				<div class="vc-nexudus-modal-content">
+					<h3><?php echo esc_html__('Connect to Nexudus', 'vc-nexudus'); ?></h3>
+					<p><?php echo esc_html__('Your username and password are not stored in WordPress. They are only used to initiate a secure connection to Nexudus and request OAuth tokens.', 'vc-nexudus'); ?></p>
+					<p>
+						<label for="vc-nexudus-username"><?php echo esc_html__('Username', 'vc-nexudus'); ?></label><br />
+						<input type="text" id="vc-nexudus-username" class="regular-text" autocomplete="username" />
+					</p>
+					<p>
+						<label for="vc-nexudus-password"><?php echo esc_html__('Password', 'vc-nexudus'); ?></label><br />
+						<input type="password" id="vc-nexudus-password" class="regular-text" autocomplete="current-password" />
+					</p>
+					<p>
+						<button class="button button-primary" id="vc-nexudus-connect-submit"><?php echo esc_html__('Connect', 'vc-nexudus'); ?></button>
+						<button class="button" id="vc-nexudus-connect-cancel"><?php echo esc_html__('Cancel', 'vc-nexudus'); ?></button>
+					</p>
+				</div>
+			</div>
 
 			<p>
 				<button class="button button-secondary" id="vc-nexudus-test-connection" data-nonce="<?php echo esc_attr(wp_create_nonce('vc_nexudus_test_connection')); ?>">
@@ -179,6 +216,7 @@ final class SettingsPage {
 			return;
 		}
 
+		wp_enqueue_style('vc-nexudus-admin-style', plugins_url('assets/css/admin-settings.css', $this->plugin_file), [], '0.1.0');
 		wp_enqueue_script(
 			'vc-nexudus-admin',
 			plugins_url('assets/js/admin-settings.js', $this->plugin_file),
@@ -190,7 +228,10 @@ final class SettingsPage {
 			'vc-nexudus-admin',
 			'vcNexudusAdmin',
 			[
-				'ajaxUrl' => admin_url('admin-ajax.php'),
+				'ajaxUrl'          => admin_url('admin-ajax.php'),
+				'connectNonce'     => wp_create_nonce('vc_nexudus_connect_oauth'),
+				'refreshNonce'     => wp_create_nonce('vc_nexudus_refresh_oauth'),
+				'disconnectNonce'  => wp_create_nonce('vc_nexudus_disconnect_oauth'),
 			]
 		);
 	}
@@ -202,7 +243,7 @@ final class SettingsPage {
 
 		check_ajax_referer('vc_nexudus_test_connection', 'nonce');
 
-		$client = new \VC\Nexudus\Api\NexudusClient($this->option_key);
+		$client = new NexudusClient($this->option_key, $this->token_manager);
 		$test   = $client->test_connection();
 
 		if (is_wp_error($test)) {
@@ -210,5 +251,60 @@ final class SettingsPage {
 		}
 
 		wp_send_json_success(['message' => __('Connection successful.', 'vc-nexudus')]);
+	}
+
+	public function ajax_connect_oauth(): void {
+		if (! current_user_can('manage_options')) {
+			wp_send_json_error(['message' => __('Not allowed.', 'vc-nexudus')], 403);
+		}
+
+		check_ajax_referer('vc_nexudus_connect_oauth', 'nonce');
+
+		$username = sanitize_text_field((string) wp_unslash($_POST['username'] ?? ''));
+		$password = (string) wp_unslash($_POST['password'] ?? '');
+		if ('' === $username || '' === $password) {
+			wp_send_json_error(['message' => __('Username and password are required.', 'vc-nexudus')], 400);
+		}
+
+		$connected = $this->token_manager->connect($username, $password);
+		if (is_wp_error($connected)) {
+			wp_send_json_error(['message' => __('Unable to connect to Nexudus. Check credentials and try again.', 'vc-nexudus')], 400);
+		}
+
+		wp_send_json_success([
+			'message' => __('Connected to Nexudus.', 'vc-nexudus'),
+			'status'  => $this->token_manager->get_status(),
+		]);
+	}
+
+	public function ajax_refresh_oauth(): void {
+		if (! current_user_can('manage_options')) {
+			wp_send_json_error(['message' => __('Not allowed.', 'vc-nexudus')], 403);
+		}
+
+		check_ajax_referer('vc_nexudus_refresh_oauth', 'nonce');
+
+		$refreshed = $this->token_manager->refresh_tokens();
+		if (is_wp_error($refreshed)) {
+			wp_send_json_error(['message' => $refreshed->get_error_message()], 400);
+		}
+
+		wp_send_json_success([
+			'message' => __('Token refresh successful.', 'vc-nexudus'),
+			'status'  => $this->token_manager->get_status(),
+		]);
+	}
+
+	public function ajax_disconnect_oauth(): void {
+		if (! current_user_can('manage_options')) {
+			wp_send_json_error(['message' => __('Not allowed.', 'vc-nexudus')], 403);
+		}
+
+		check_ajax_referer('vc_nexudus_disconnect_oauth', 'nonce');
+		$this->token_manager->disconnect();
+		wp_send_json_success([
+			'message' => __('Disconnected from Nexudus.', 'vc-nexudus'),
+			'status'  => $this->token_manager->get_status(),
+		]);
 	}
 }
