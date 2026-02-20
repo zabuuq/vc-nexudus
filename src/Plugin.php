@@ -32,7 +32,7 @@ final class Plugin {
 		$crypto        = new Crypto($key_material);
 		$token_store   = new TokenStore($crypto);
 		$oauth_client  = new OAuthClient(self::OPTION_KEY, $clock);
-		$token_manager = new TokenManager($token_store, $oauth_client);
+		$token_manager = new TokenManager($token_store, $oauth_client, $clock);
 
 		$cache_service   = new CacheService();
 		$client          = new NexudusClient(self::OPTION_KEY, $token_manager);
