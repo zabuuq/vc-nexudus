@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace VC\Nexudus\Api;
 
+use VC\Nexudus\Auth\TokenManager;
 use WP_Error;
 
 final class NexudusClient {
 	private string $option_key;
+	private TokenManager $token_manager;
 
-	public function __construct(string $option_key) {
-		$this->option_key = $option_key;
+	public function __construct(string $option_key, TokenManager $token_manager) {
+		$this->option_key    = $option_key;
+		$this->token_manager = $token_manager;
 	}
 
 	/**
@@ -18,13 +21,13 @@ final class NexudusClient {
 	 */
 	public function request(string $path, array $query = []): array|WP_Error {
 		$settings = $this->get_settings();
-		$base_url = Endpoints::normalize_base_url((string) ($settings['api_base_url'] ?? ''));
+		$base_url = Endpoints::normalize_base_url((string) ($settings['tenant_base_url'] ?? ''));
 
 		if ('' === $base_url) {
-			return new WP_Error('vc_nexudus_missing_base', __('Nexudus API base URL is not configured.', 'vc-nexudus'));
+			return new WP_Error('vc_nexudus_missing_base', __('Nexudus tenant base URL is not configured.', 'vc-nexudus'));
 		}
 
-		$token = $this->get_access_token();
+		$token = $this->token_manager->get_access_token();
 		if (is_wp_error($token)) {
 			return $token;
 		}
@@ -34,28 +37,33 @@ final class NexudusClient {
 			$url = add_query_arg($query, $url);
 		}
 
-		$response = wp_remote_request(
-			$url,
-			[
-				'method'  => 'GET',
-				'timeout' => 20,
-				'headers' => [
-					'Authorization' => 'Bearer ' . $token,
-					'Accept'        => 'application/json',
-				],
-			]
-		);
-
+		$response = $this->send_get_request($url, $token);
 		if (is_wp_error($response)) {
 			return $response;
 		}
 
 		$status = (int) wp_remote_retrieve_response_code($response);
-		$body   = wp_remote_retrieve_body($response);
-		$data   = json_decode($body, true);
+		if (401 === $status || 403 === $status) {
+			$refresh = $this->token_manager->refresh_tokens();
+			if (is_wp_error($refresh)) {
+				return $refresh;
+			}
+
+			$response = $this->send_get_request($url, (string) $refresh['access_token']);
+			if (is_wp_error($response)) {
+				return $response;
+			}
+			$status = (int) wp_remote_retrieve_response_code($response);
+		}
+
+		$body = wp_remote_retrieve_body($response);
+		$data = json_decode($body, true);
 
 		if ($status < 200 || $status > 299) {
-			return new WP_Error('vc_nexudus_http_error', __('Nexudus API request failed.', 'vc-nexudus'), ['status' => $status, 'body' => $data]);
+			if (defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
+				error_log('VC Nexudus API HTTP error code: ' . (string) $status);
+			}
+			return new WP_Error('vc_nexudus_http_error', __('Nexudus API request failed.', 'vc-nexudus'), ['status' => $status]);
 		}
 
 		if (! is_array($data)) {
@@ -77,38 +85,19 @@ final class NexudusClient {
 		return true;
 	}
 
-	private function get_access_token(): string|WP_Error {
-		$token_cache_key = 'vc_nexudus_access_token';
-		$cached_token    = get_transient($token_cache_key);
-		if (is_string($cached_token) && '' !== $cached_token) {
-			return $cached_token;
-		}
-
-		$settings      = $this->get_settings();
-		$token_url     = (string) ($settings['oauth_token_url'] ?? '');
-		$client_id     = (string) ($settings['oauth_client_id'] ?? '');
-		$client_secret = (string) ($settings['oauth_client_secret'] ?? '');
-		$grant_type    = (string) ($settings['oauth_grant_type'] ?? 'client_credentials');
-		$scope         = (string) ($settings['oauth_scope'] ?? '');
-
-		if ('' === $token_url || '' === $client_id || '' === $client_secret) {
-			return new WP_Error('vc_nexudus_missing_oauth', __('OAuth settings are incomplete.', 'vc-nexudus'));
-		}
-
-		$body = [
-			'grant_type'    => $grant_type,
-			'client_id'     => $client_id,
-			'client_secret' => $client_secret,
-		];
-		if ('' !== $scope) {
-			$body['scope'] = $scope;
-		}
-
-		$response = wp_remote_post(
-			$token_url,
+	/**
+	 * @return array<string,mixed>|WP_Error
+	 */
+	private function send_get_request(string $url, string $token): array|WP_Error {
+		$response = wp_remote_request(
+			$url,
 			[
+				'method'  => 'GET',
 				'timeout' => 20,
-				'body'    => $body,
+				'headers' => [
+					'Authorization' => 'Bearer ' . $token,
+					'Accept'        => 'application/json',
+				],
 			]
 		);
 
@@ -116,21 +105,7 @@ final class NexudusClient {
 			return $response;
 		}
 
-		$status = (int) wp_remote_retrieve_response_code($response);
-		$data   = json_decode((string) wp_remote_retrieve_body($response), true);
-		if ($status < 200 || $status > 299 || ! is_array($data)) {
-			return new WP_Error('vc_nexudus_oauth_failed', __('Unable to retrieve OAuth token from Nexudus.', 'vc-nexudus'));
-		}
-
-		$access_token = isset($data['access_token']) ? (string) $data['access_token'] : '';
-		$expires_in   = isset($data['expires_in']) ? absint($data['expires_in']) : HOUR_IN_SECONDS;
-
-		if ('' === $access_token) {
-			return new WP_Error('vc_nexudus_oauth_missing_token', __('OAuth response did not contain an access token.', 'vc-nexudus'));
-		}
-
-		set_transient($token_cache_key, $access_token, max(60, $expires_in - 60));
-		return $access_token;
+		return $response;
 	}
 
 	/**
